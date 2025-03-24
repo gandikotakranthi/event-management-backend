@@ -23,7 +23,6 @@ const EventSchema = new mongoose.Schema({
 });
 
 const Event = mongoose.model("Event", EventSchema);
-const OpenAI_API_KEY = process.env.HF_API_KEY;
 
 async function categorizeEvent(title, description) {
   const prompt = `Classify this event into one of these categories: 
@@ -31,24 +30,37 @@ async function categorizeEvent(title, description) {
   If none match, return "Uncategorized".
   Event: "${title}" - ${description}
   Category:`;
-  try {
-      const response = await axios.post(
-          "https://api-inference.huggingface.co/models/facebook/bart-large-mnli",
-          {
-              inputs: prompt,
-              parameters: { candidate_labels: ["Conference", "Workshop", "Social", "Webinar", "Birthday", "Meeting", "Festival", "Casual Gathering"] }
-          },
-          {
-              headers: { Authorization: `Bearer ${OpenAI_API_KEY}` }
-          }
-      );
 
-      const category = response.data?.labels?.[0] || "Uncategorized";
-      return category;
-  } catch (error) {
-      console.error("Hugging Face AI categorization failed:", error);
-      return "Uncategorized";
+  const apiUrl = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli";
+  const headers = { 
+      Authorization: `Bearer ${process.env.HF_API_KEY}`,
+      "Content-Type": "application/json"
+  };
+  
+  const data = {
+      inputs: prompt,
+      parameters: { candidate_labels: ["Conference", "Workshop", "Social", "Webinar", "Birthday", "Meeting", "Festival", "Casual Gathering"] }
+  };
+  let retries = 3;
+  while (retries > 0) {
+      try {
+          const response = await axios.post(apiUrl, data, { headers });
+          if (response.status === 200 && response.data?.labels?.length) {
+              return response.data.labels[0]; 
+          }
+          break; 
+      } catch (error) {
+          console.error("Hugging Face AI categorization failed:", error.message);
+          if (error.response && error.response.status === 503) {
+              console.warn(`Retrying... (${4 - retries}/3)`);
+              retries--;
+              await new Promise(res => setTimeout(res, 2000)); 
+          } else {
+              break;
+          }
+      }
   }
+  return "Uncategorized";
 }
 
 app.post("/events", async (req, res) => {
